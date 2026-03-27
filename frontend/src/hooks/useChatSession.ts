@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef } from 'react';
-import type { ChatMessage, ToolEvent, ChartData, TableData } from '../types';
+import { useState, useCallback } from 'react';
+import type { ChatMessage, ToolEvent } from '../types';
 import { streamChat } from '../api/client';
 
 let nextId = 1;
@@ -9,7 +9,6 @@ export function useChatSession() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(async (content: string) => {
     const userMsg: ChatMessage = { id: genId(), role: 'user', content };
