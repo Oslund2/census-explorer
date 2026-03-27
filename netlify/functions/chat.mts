@@ -93,7 +93,20 @@ Rules:
 - When showing DMA demographics, aggregate county-level data and present market-level totals.
 - When showing BLS or FRED data, present time series as line charts.
 - When showing Google Trends data, use bar charts for DMA-level interest comparison.
-- For market reports, use the summarize tool to generate executive summaries from collected data.`;
+- For market reports, use the summarize tool to generate executive summaries from collected data.
+- When showing FEMA disaster data, use tables with declaration date, type, title, and designated area.
+- When showing business patterns data, use bar charts for establishment/employee counts by industry.
+- When showing USDA food access data, note food desert status and poverty rates.
+- When geocoding, return the matched address, coordinates, and all FIPS codes found.
+- Use the HUD crosswalk to bridge ZIP codes to counties/CBSAs when users provide ZIP codes.
+
+## Additional Tools
+- fema_disasters: Search FEMA disaster declarations by state, year, or incident type.
+- census_geocoder: Convert an address to coordinates + FIPS codes (state, county, tract, block).
+- census_business_patterns: Get establishment/employee/payroll counts by industry (NAICS) and geography.
+- usda_food_access: Check if a census tract or county is a food desert, get poverty and food access metrics.
+- usda_rural_urban: Get rural-urban classification codes for a county.
+- hud_crosswalk: Convert between ZIP codes and counties, tracts, CBSAs, or congressional districts.`;
 
 const tools: Anthropic.Tool[] = [
   {
@@ -294,6 +307,136 @@ const tools: Anthropic.Tool[] = [
         },
       },
       required: ["market_name", "data_points"],
+    },
+  },
+  {
+    name: "fema_disasters",
+    description:
+      "Search FEMA disaster declarations by state, year, or incident type. Returns disaster number, declaration date, type (DR=Major Disaster, EM=Emergency, FM=Fire Management), title, designated area, and program flags. No API key needed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        state: {
+          type: "string",
+          description: 'Two-letter state abbreviation. E.g. "CA", "TX", "FL"',
+        },
+        year: {
+          type: "number",
+          description: "Filter by declaration year. E.g. 2024",
+        },
+        incident_type: {
+          type: "string",
+          description:
+            'Filter by incident type. E.g. "Fire", "Hurricane", "Flood", "Tornado", "Severe Storm(s)", "Earthquake"',
+        },
+        limit: {
+          type: "number",
+          description: "Max results to return (default 20)",
+        },
+      },
+    },
+  },
+  {
+    name: "census_geocoder",
+    description:
+      "Convert a street address to geographic coordinates and Census FIPS codes (state, county, tract, block, congressional district, CBSA). Uses the official Census Bureau Geocoder. No API key needed. Useful for bridging an address to Census geography codes for data lookups.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        address: {
+          type: "string",
+          description:
+            'Full street address. E.g. "1600 Pennsylvania Ave NW, Washington, DC 20500"',
+        },
+      },
+      required: ["address"],
+    },
+  },
+  {
+    name: "census_business_patterns",
+    description:
+      "Fetch County Business Patterns data from the Census Bureau. Returns establishment counts, employee counts, and annual payroll by industry (NAICS code) and geography. Uses the same Census API key. Available geographies: state, county, metro area (MSA), zip code, congressional district.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        naics: {
+          type: "string",
+          description:
+            'NAICS industry code. E.g. "72" for Accommodation & Food Services, "44-45" for Retail, "51" for Information, "54" for Professional Services. Use "00" for all industries.',
+        },
+        for_clause: {
+          type: "string",
+          description:
+            'Geography filter. E.g. "county:037" for LA County, "state:06" for California, "metropolitan statistical area/micropolitan statistical area:*" for all metros.',
+        },
+        in_clause: {
+          type: "string",
+          description:
+            'Parent geography. E.g. "state:06" when querying counties in California.',
+        },
+        year: {
+          type: "number",
+          description: "Data year (default 2021). Available: 2019-2021.",
+        },
+      },
+      required: ["naics", "for_clause"],
+    },
+  },
+  {
+    name: "usda_food_access",
+    description:
+      "Check food access and food desert status for census tracts. Returns data from the USDA Food Access Research Atlas including: low income tract flag, low access flags (1mi/10mi and 0.5mi/10mi), poverty rate, median family income, population, and urban/rural flag. Query by FIPS code or get multiple tracts.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        fips: {
+          type: "string",
+          description:
+            'State+county FIPS code (5 digits) to get all tracts in a county, or full 11-digit tract FIPS. E.g. "06037" for LA County, "06037201100" for a specific tract.',
+        },
+        limit: {
+          type: "number",
+          description: "Max results (default 50)",
+        },
+      },
+      required: ["fips"],
+    },
+  },
+  {
+    name: "usda_rural_urban",
+    description:
+      "Get USDA rural-urban classification for a county. Returns Rural-Urban Continuum Code (1=metro 1M+, 9=rural <2,500), Urban Influence Code, metro/micropolitan status, and county typology flags (farming, mining, manufacturing, recreation, retirement dependent). Query by county FIPS code.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        county_fips: {
+          type: "string",
+          description:
+            'Five-digit county FIPS code. E.g. "06037" for Los Angeles County, "39061" for Hamilton County OH.',
+        },
+      },
+      required: ["county_fips"],
+    },
+  },
+  {
+    name: "hud_crosswalk",
+    description:
+      "Convert between ZIP codes and other geographies using the HUD USPS Crosswalk. Supports: ZIP→Tract, ZIP→County, ZIP→CBSA, ZIP→Congressional District, and reverse lookups (County→ZIP, Tract→ZIP, CBSA→ZIP). Requires HUD_API_KEY environment variable.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        type: {
+          type: "number",
+          description:
+            "Crosswalk type: 1=ZIP→Tract, 2=ZIP→County, 3=ZIP→CBSA, 4=ZIP→CBSA Div, 5=ZIP→CD, 6=Tract→ZIP, 7=County→ZIP, 8=CBSA→ZIP, 9=CBSA Div→ZIP, 10=CD→ZIP",
+        },
+        query: {
+          type: "string",
+          description:
+            'The geographic ID to look up. For ZIP lookups: 5-digit ZIP. For reverse: FIPS code or CBSA code. E.g. "22031", "06037", "17140".',
+        },
+      },
+      required: ["type", "query"],
     },
   },
 ];
@@ -503,6 +646,147 @@ async function callTool(
       timeframe: tfParam,
       suggestion: "Based on your training data, provide estimated search interest trends for this keyword in the specified market. Note that these are approximations.",
     });
+  }
+
+  if (name === "fema_disasters") {
+    const { state, year, incident_type, limit } = input as {
+      state?: string;
+      year?: number;
+      incident_type?: string;
+      limit?: number;
+    };
+    const filters: string[] = [];
+    if (state) filters.push(`state eq '${state.toUpperCase()}'`);
+    if (year) filters.push(`declarationDate ge '${year}-01-01T00:00:00.000Z' and declarationDate le '${year}-12-31T23:59:59.000Z'`);
+    if (incident_type) filters.push(`incidentType eq '${incident_type}'`);
+
+    const params = new URLSearchParams({
+      $top: String(limit || 20),
+      $orderby: "declarationDate desc",
+      $select: "disasterNumber,state,declarationType,declarationDate,incidentType,declarationTitle,designatedArea,fipsStateCode,fipsCountyCode,paProgramDeclared,hmProgramDeclared,ihProgramDeclared",
+    });
+    if (filters.length > 0) params.set("$filter", filters.join(" and "));
+
+    const res = await fetch(
+      `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?${params}`
+    );
+    if (!res.ok) {
+      return JSON.stringify({ error: `FEMA API returned ${res.status}` });
+    }
+    const data = await res.json();
+    return JSON.stringify(data);
+  }
+
+  if (name === "census_geocoder") {
+    const { address } = input as { address: string };
+    const params = new URLSearchParams({
+      address,
+      benchmark: "Public_AR_Current",
+      vintage: "Current_Current",
+      format: "json",
+    });
+    const res = await fetch(
+      `https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress?${params}`
+    );
+    if (!res.ok) {
+      return JSON.stringify({ error: `Census Geocoder returned ${res.status}` });
+    }
+    const data = await res.json();
+    return JSON.stringify(data);
+  }
+
+  if (name === "census_business_patterns") {
+    const { naics, for_clause, in_clause, year } = input as {
+      naics: string;
+      for_clause: string;
+      in_clause?: string;
+      year?: number;
+    };
+    const yr = year || 2021;
+    let url = `${CENSUS_API_BASE}/${yr}/cbp?get=ESTAB,EMP,PAYANN,NAICS2017&for=${for_clause}&NAICS2017=${naics}&key=${censusKey}`;
+    if (in_clause) url += `&in=${in_clause}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      const text = await res.text();
+      return JSON.stringify({ error: `Census CBP API returned ${res.status}: ${text}` });
+    }
+    const data = await res.json();
+    return JSON.stringify(data);
+  }
+
+  if (name === "usda_food_access") {
+    const { fips, limit } = input as { fips: string; limit?: number };
+    const lim = limit || 50;
+    // Query the USDA Food Access Research Atlas via ArcGIS REST
+    let where: string;
+    if (fips.length === 5) {
+      // County FIPS - match tracts starting with this county
+      where = `CensusTract LIKE '${fips}%'`;
+    } else if (fips.length === 11) {
+      where = `CensusTract = '${fips}'`;
+    } else {
+      where = `CensusTract LIKE '${fips}%'`;
+    }
+
+    const params = new URLSearchParams({
+      where,
+      outFields: "CensusTract,LILATracts_1And10,LILATracts_halfAnd10,LowIncomeTracts,PovertyRate,MedianFamilyIncome,LA1and10,LAhalfand10,Urban,POP2010,OHU2010,GroupQuartersFlag",
+      f: "json",
+      resultRecordCount: String(lim),
+    });
+    const res = await fetch(
+      `https://gisportal.ers.usda.gov/server/rest/services/FARA/FARA_2019/MapServer/30/query?${params}`
+    );
+    if (!res.ok) {
+      return JSON.stringify({ error: `USDA Food Access API returned ${res.status}` });
+    }
+    const data = await res.json();
+    // Simplify the ArcGIS response
+    const features = (data.features || []).map((f: { attributes: Record<string, unknown> }) => f.attributes);
+    return JSON.stringify({ count: features.length, tracts: features });
+  }
+
+  if (name === "usda_rural_urban") {
+    const { county_fips } = input as { county_fips: string };
+    const params = new URLSearchParams({
+      where: `FIPSTXT = '${county_fips}'`,
+      outFields: "*",
+      f: "json",
+      resultRecordCount: "1",
+    });
+    const res = await fetch(
+      `https://gisportal.ers.usda.gov/server/rest/services/Rural_Atlas_Data/County_Classifications/MapServer/0/query?${params}`
+    );
+    if (!res.ok) {
+      return JSON.stringify({ error: `USDA Rural-Urban API returned ${res.status}` });
+    }
+    const data = await res.json();
+    const features = (data.features || []).map((f: { attributes: Record<string, unknown> }) => f.attributes);
+    return JSON.stringify(features.length > 0 ? features[0] : { error: "County not found" });
+  }
+
+  if (name === "hud_crosswalk") {
+    const { type, query } = input as { type: number; query: string };
+    const hudKey = process.env.HUD_API_KEY || "";
+    if (!hudKey) {
+      return JSON.stringify({ error: "HUD_API_KEY not configured. HUD crosswalk unavailable." });
+    }
+    const params = new URLSearchParams({
+      type: String(type),
+      query,
+    });
+    const res = await fetch(
+      `https://www.huduser.gov/hudapi/public/usps?${params}`,
+      {
+        headers: { Authorization: `Bearer ${hudKey}` },
+      }
+    );
+    if (!res.ok) {
+      return JSON.stringify({ error: `HUD API returned ${res.status}` });
+    }
+    const data = await res.json();
+    return JSON.stringify(data);
   }
 
   if (name === "summarize_report") {
