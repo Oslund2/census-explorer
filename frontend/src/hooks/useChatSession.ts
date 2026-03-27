@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { ChatMessage, ToolEvent } from '../types';
+import type { ChatMessage, ToolEvent, ChartData, TableData } from '../types';
 import { streamChat } from '../api/client';
 
 let nextId = 1;
