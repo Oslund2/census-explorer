@@ -10,6 +10,14 @@ const toolLabels: Record<string, string> = {
   'list-datasets': 'Listing datasets',
   'fetch-dataset-geography': 'Checking geography levels',
   'search-data-tables': 'Searching data tables',
+  'census_fetch': 'Fetching Census data',
+  'census_geo_lookup': 'Looking up geography',
+  'tv_station_search': 'Searching FCC TV stations',
+  'dma_counties': 'Looking up TV market counties',
+  'bls_fetch': 'Fetching BLS employment data',
+  'fred_fetch': 'Fetching FRED economic data',
+  'google_trends': 'Checking Google Trends',
+  'summarize_report': 'Generating market summary',
 };
 
 export function ToolActivity({ events }: Props) {

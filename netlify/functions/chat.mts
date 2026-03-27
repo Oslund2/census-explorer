@@ -1,8 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 const CENSUS_API_BASE = "https://api.census.gov/data";
+const SUPABASE_URL = process.env.SUPABASE_URL || "https://paiskiyabhmmlckefqoh.supabase.co";
+const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || "";
 
-const SYSTEM_PROMPT = `You are Census Explorer, an AI assistant that helps users explore U.S. Census Bureau data through natural language.
+const SYSTEM_PROMPT = `You are Census Explorer, an AI assistant that helps users explore U.S. Census Bureau data and FCC TV station/market data through natural language.
 
 You handle ALL of these use cases:
 1. **Data Queries**: "What's the population of Austin, TX?" → Look up data and return results with charts.
@@ -10,11 +12,29 @@ You handle ALL of these use cases:
 3. **Site Selection**: "Find cities over 100k with high income" → Search broadly, filter, rank results.
 4. **General Chat**: Answer Census-related questions conversationally.
 5. **Reports**: "Generate a report for California" → Fetch comprehensive demographic data.
+6. **TV Market Analysis**: "What are the demographics of the Cincinnati DMA?" or "Show me stations in the Dallas market" → Look up TV stations, DMA market boundaries, and Census demographics for those markets.
 
 ## Tools Available
-You have tools to query the Census Bureau API directly:
 - census_fetch: Fetch data from any Census dataset with specific variables and geography filters.
 - census_geo_lookup: Look up FIPS codes for geographic areas.
+- tv_station_search: Search FCC TV stations by callsign, city, state, DMA, or network.
+- dma_counties: Get all counties that make up a TV market (DMA), with state/county FIPS codes for Census lookups.
+- bls_fetch: Fetch employment/labor data from the Bureau of Labor Statistics API.
+- fred_fetch: Fetch economic indicators from the FRED (Federal Reserve Economic Data) API.
+- google_trends: Get Google search interest data by keyword and DMA/region.
+- summarize_report: Generate an executive summary from collected market data using AI.
+
+## TV Market / DMA Workflow
+When a user asks about a TV market or DMA:
+1. Use \`dma_counties\` to find all counties in that DMA
+2. Use the county FIPS codes + state FIPS codes to query Census data for those counties
+3. Aggregate or summarize the Census data across the DMA
+4. Use \`tv_station_search\` to show which TV stations serve that market
+
+When a user asks about a TV station (e.g. "WCPO" or "KHOU"):
+1. Use \`tv_station_search\` to find the station details
+2. Use \`dma_counties\` to find the counties in that station's DMA
+3. Pull Census demographics for the market
 
 ## Common Census Variables (ACS 5-Year)
 - B01003_001E: Total Population
@@ -36,6 +56,7 @@ You have tools to query the Census Bureau API directly:
 - State FIPS: AL=01, AK=02, AZ=04, AR=05, CA=06, CO=08, CT=09, DE=10, FL=12, GA=13, HI=15, ID=16, IL=17, IN=18, IA=19, KS=20, KY=21, LA=22, ME=23, MD=24, MA=25, MI=26, MN=27, MS=28, MO=29, MT=30, NE=31, NV=32, NH=33, NJ=34, NM=35, NY=36, NC=37, ND=38, OH=39, OK=40, OR=41, PA=42, RI=44, SC=45, SD=46, TN=47, TX=48, UT=49, VT=50, VA=51, WA=53, WV=54, WI=55, WY=56
 - Use for=state:* for all states, for=county:* in=state:XX for counties in a state
 - Use for=place:* in=state:XX for cities/places in a state
+- For DMA queries: use for=county:XXX in=state:YY for each county in the DMA
 
 ## Response Format
 After your text explanation, ALWAYS include a JSON block wrapped in \`\`\`json\`\`\` fences:
@@ -67,7 +88,12 @@ Rules:
 - Pick chart type based on data shape: single comparison = bar, time series = line, parts of whole = pie, multi-metric = radar.
 - Always include 2-3 contextual follow-up suggestions.
 - Format currency with $ and commas. Format percentages with %.
-- Keep text concise but informative.`;
+- Keep text concise but informative.
+- When showing TV station data, include a table with callsign, channel, city, network affiliation, and DMA.
+- When showing DMA demographics, aggregate county-level data and present market-level totals.
+- When showing BLS or FRED data, present time series as line charts.
+- When showing Google Trends data, use bar charts for DMA-level interest comparison.
+- For market reports, use the summarize tool to generate executive summaries from collected data.`;
 
 const tools: Anthropic.Tool[] = [
   {
@@ -108,7 +134,7 @@ const tools: Anthropic.Tool[] = [
   {
     name: "census_geo_lookup",
     description:
-      "Search for a geographic area's FIPS code by name. Queries the Census API to find matching geographies. Use this when you need to find the FIPS code for a city, county, or state.",
+      "Search for a geographic area's FIPS code by name. Queries the Census API to find matching geographies.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -131,12 +157,170 @@ const tools: Anthropic.Tool[] = [
       required: ["name", "geo_type"],
     },
   },
+  {
+    name: "tv_station_search",
+    description:
+      "Search the FCC TV station database. Find stations by callsign, city, state, DMA (TV market), or network affiliation. Returns station details including callsign, channel, city, state, DMA, network, licensee, and status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        search: {
+          type: "string",
+          description:
+            'General search term - matches callsign, city, DMA name, or network. E.g. "WCPO", "Dallas", "ABC"',
+        },
+        dma: {
+          type: "string",
+          description:
+            'Filter by DMA/TV market name. E.g. "Cincinnati", "Dallas", "New York"',
+        },
+        state: {
+          type: "string",
+          description: 'Filter by state abbreviation. E.g. "OH", "TX", "CA"',
+        },
+        limit: {
+          type: "number",
+          description: "Max results to return (default 50)",
+        },
+      },
+    },
+  },
+  {
+    name: "dma_counties",
+    description:
+      "Get all counties that make up a TV market (DMA/Designated Market Area). Returns county names, state, state FIPS, and county FIPS codes. Use the FIPS codes to query Census data for these counties. This is essential for getting demographics of a TV market.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        dma_name: {
+          type: "string",
+          description:
+            'Name or partial name of the DMA. E.g. "Cincinnati", "Dallas", "Los Angeles"',
+        },
+      },
+      required: ["dma_name"],
+    },
+  },
+  {
+    name: "bls_fetch",
+    description:
+      "Fetch employment and labor statistics from the Bureau of Labor Statistics (BLS) API. Returns time series data for unemployment rates, employment levels, labor force, wages, and CPI by metro area or state. Common series prefixes: LAUST (state unemployment), LAUMT (metro unemployment), CEU (national employment by industry), CUUR (CPI).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        series_ids: {
+          type: "array" as const,
+          items: { type: "string" },
+          description:
+            'BLS series IDs. E.g. ["LAUST390000000000003"] for Ohio unemployment rate. Metro unemployment: LAUMT{fips}000000003. State unemployment: LAUST{fips}0000000000003.',
+        },
+        start_year: {
+          type: "string",
+          description: 'Start year, e.g. "2020"',
+        },
+        end_year: {
+          type: "string",
+          description: 'End year, e.g. "2024"',
+        },
+      },
+      required: ["series_ids"],
+    },
+  },
+  {
+    name: "fred_fetch",
+    description:
+      "Fetch economic data from FRED (Federal Reserve Economic Data). Supports GDP, inflation, housing, income, and other indicators at national, state, and metro (MSA) levels. Common series: MEHOINUS (median household income), GDP, UNRATE (unemployment), MORTGAGE30US, CPIAUCSL (CPI). For metro areas, search for series like CINOH (Cincinnati GDP), DALLTX (Dallas), etc.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        series_id: {
+          type: "string",
+          description:
+            'FRED series ID. E.g. "MEHOINUSOH646N001" for Ohio median income, "GDP" for national GDP, "UNRATE" for unemployment rate.',
+        },
+        start_date: {
+          type: "string",
+          description: 'Start date in YYYY-MM-DD format. E.g. "2020-01-01"',
+        },
+        end_date: {
+          type: "string",
+          description: 'End date in YYYY-MM-DD format. E.g. "2024-12-31"',
+        },
+      },
+      required: ["series_id"],
+    },
+  },
+  {
+    name: "google_trends",
+    description:
+      "Get Google search interest data for keywords, optionally filtered by DMA (TV market region) or state. Returns interest over time (0-100 scale) and interest by region. Useful for understanding consumer interest and market dynamics. Note: uses an unofficial endpoint and may have rate limits.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        keyword: {
+          type: "string",
+          description:
+            'Search keyword or phrase. E.g. "streaming services", "electric vehicles", "home buying"',
+        },
+        geo: {
+          type: "string",
+          description:
+            'Geographic filter. "US" for national, "US-OH" for Ohio, "US-TX" for Texas. Default "US".',
+        },
+        timeframe: {
+          type: "string",
+          description:
+            'Time range. "today 12-m" for past year, "today 3-m" for 3 months, "2023-01-01 2024-01-01" for custom range. Default "today 12-m".',
+        },
+      },
+      required: ["keyword"],
+    },
+  },
+  {
+    name: "summarize_report",
+    description:
+      "Generate an executive summary from collected market data. Pass in raw data from Census, BLS, FRED, FCC stations, and Google Trends, and this tool will produce a concise market intelligence brief suitable for broadcast executives. Use this after collecting data from other tools.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        market_name: {
+          type: "string",
+          description: 'Name of the market. E.g. "Cincinnati, OH DMA"',
+        },
+        data_points: {
+          type: "string",
+          description:
+            "JSON string containing collected data points to summarize. Include population, income, employment, economic indicators, TV stations, and trends data.",
+        },
+      },
+      required: ["market_name", "data_points"],
+    },
+  },
 ];
 
-async function callCensusTool(
+async function supabaseQuery(
+  table: string,
+  params: Record<string, string>
+): Promise<any> {
+  const query = new URLSearchParams(params);
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
+  const res = await fetch(url, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    return { error: `Supabase query failed: ${res.status} - ${text}` };
+  }
+  return res.json();
+}
+
+async function callTool(
   name: string,
   input: Record<string, unknown>,
-  apiKey: string
+  censusKey: string
 ): Promise<string> {
   if (name === "census_fetch") {
     const { dataset, year, variables, for_clause, in_clause } = input as {
@@ -147,7 +331,7 @@ async function callCensusTool(
       in_clause?: string;
     };
 
-    let url = `${CENSUS_API_BASE}/${year}/${dataset}?get=${variables}&for=${for_clause}&key=${apiKey}`;
+    let url = `${CENSUS_API_BASE}/${year}/${dataset}?get=${variables}&for=${for_clause}&key=${censusKey}`;
     if (in_clause) url += `&in=${in_clause}`;
 
     const res = await fetch(url);
@@ -170,15 +354,17 @@ async function callCensusTool(
 
     let url: string;
     if (geo_type === "state") {
-      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=state:*&key=${apiKey}`;
+      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=state:*&key=${censusKey}`;
     } else if (geo_type === "place" && state_fips) {
-      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=place:*&in=state:${state_fips}&key=${apiKey}`;
+      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=place:*&in=state:${state_fips}&key=${censusKey}`;
     } else if (geo_type === "county" && state_fips) {
-      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=county:*&in=state:${state_fips}&key=${apiKey}`;
+      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=county:*&in=state:${state_fips}&key=${censusKey}`;
     } else if (geo_type === "county") {
-      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=county:*&key=${apiKey}`;
+      url = `${CENSUS_API_BASE}/2022/acs/acs5?get=NAME&for=county:*&key=${censusKey}`;
     } else {
-      return JSON.stringify({ error: "state_fips required for place/county lookup" });
+      return JSON.stringify({
+        error: "state_fips required for place/county lookup",
+      });
     }
 
     const res = await fetch(url);
@@ -187,13 +373,150 @@ async function callCensusTool(
     }
     const data: string[][] = await res.json();
 
-    // Filter by name (case-insensitive partial match)
     const matches = data
       .slice(1)
       .filter((row) => row[0]?.toLowerCase().includes(geoName.toLowerCase()))
       .slice(0, 10);
 
     return JSON.stringify({ headers: data[0], matches });
+  }
+
+  if (name === "tv_station_search") {
+    const { search, dma, state, limit } = input as {
+      search?: string;
+      dma?: string;
+      state?: string;
+      limit?: number;
+    };
+    const lim = String(limit || 50);
+    const params: Record<string, string> = { limit: lim, select: "*" };
+
+    if (search) {
+      params.or = `(callsign.ilike.*${search}*,city.ilike.*${search}*,dma_name.ilike.*${search}*,network_affiliation.ilike.*${search}*)`;
+    } else if (dma) {
+      params.dma_name = `ilike.*${dma}*`;
+    } else if (state) {
+      params.state = `eq.${state.toUpperCase()}`;
+    }
+
+    const data = await supabaseQuery("tv_stations", params);
+    return JSON.stringify(data);
+  }
+
+  if (name === "dma_counties") {
+    const { dma_name } = input as { dma_name: string };
+    const data = await supabaseQuery("dma_counties", {
+      dma_name: `ilike.*${dma_name}*`,
+      select:
+        "state,state_abbr,county,county_fips,state_fips,dma_name,msa",
+      limit: "200",
+    });
+    return JSON.stringify(data);
+  }
+
+  if (name === "bls_fetch") {
+    const { series_ids, start_year, end_year } = input as {
+      series_ids: string[];
+      start_year?: string;
+      end_year?: string;
+    };
+    const blsKey = process.env.BLS_API_KEY || "";
+    const body: Record<string, unknown> = {
+      seriesid: series_ids.slice(0, 25),
+      startyear: start_year || "2020",
+      endyear: end_year || "2024",
+    };
+    if (blsKey) body.registrationkey = blsKey;
+
+    const res = await fetch("https://api.bls.gov/publicAPI/v2/timeseries/data/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      return JSON.stringify({ error: `BLS API returned ${res.status}` });
+    }
+    const data = await res.json();
+    return JSON.stringify(data);
+  }
+
+  if (name === "fred_fetch") {
+    const { series_id, start_date, end_date } = input as {
+      series_id: string;
+      start_date?: string;
+      end_date?: string;
+    };
+    const fredKey = process.env.FRED_API_KEY || "";
+    if (!fredKey) {
+      return JSON.stringify({ error: "FRED_API_KEY not configured. FRED data unavailable." });
+    }
+    let url = `https://api.stlouisfed.org/fred/series/observations?series_id=${series_id}&api_key=${fredKey}&file_type=json`;
+    if (start_date) url += `&observation_start=${start_date}`;
+    if (end_date) url += `&observation_end=${end_date}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      return JSON.stringify({ error: `FRED API returned ${res.status}` });
+    }
+    const data = await res.json();
+    // Trim to last 50 observations to keep token usage reasonable
+    if (data.observations && data.observations.length > 50) {
+      data.observations = data.observations.slice(-50);
+    }
+    return JSON.stringify(data);
+  }
+
+  if (name === "google_trends") {
+    const { keyword, geo, timeframe } = input as {
+      keyword: string;
+      geo?: string;
+      timeframe?: string;
+    };
+    // Use Google Trends unofficial endpoint via a public proxy approach
+    // Since there's no stable free API, we return a structured message
+    // pointing Claude to use its knowledge + available DMA data
+    const geoParam = geo || "US";
+    const tfParam = timeframe || "today 12-m";
+
+    // Try the SerpApi if key is available
+    const serpKey = process.env.SERPAPI_KEY || "";
+    if (serpKey) {
+      const params = new URLSearchParams({
+        engine: "google_trends",
+        q: keyword,
+        geo: geoParam,
+        date: tfParam,
+        api_key: serpKey,
+      });
+      const res = await fetch(`https://serpapi.com/search?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        return JSON.stringify(data);
+      }
+    }
+
+    // Fallback: return guidance for Claude to use its knowledge
+    return JSON.stringify({
+      note: "Google Trends API key not configured. Using general market knowledge.",
+      keyword,
+      geo: geoParam,
+      timeframe: tfParam,
+      suggestion: "Based on your training data, provide estimated search interest trends for this keyword in the specified market. Note that these are approximations.",
+    });
+  }
+
+  if (name === "summarize_report") {
+    const { market_name, data_points } = input as {
+      market_name: string;
+      data_points: string;
+    };
+    // Return the data back to Claude for summarization in its response
+    return JSON.stringify({
+      action: "summarize",
+      market: market_name,
+      data: data_points,
+      instructions: "Generate a concise executive market intelligence brief from this data. Include: Market Overview, Demographics, Economic Health, Media Landscape, and Key Trends. Format for broadcast executives.",
+    });
   }
 
   return JSON.stringify({ error: `Unknown tool: ${name}` });
@@ -228,7 +551,6 @@ export default async (req: Request) => {
   const { messages } = await req.json();
   const client = new Anthropic({ apiKey: anthropicKey });
 
-  // Create a readable stream for SSE
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -253,7 +575,6 @@ export default async (req: Request) => {
             tools,
           });
 
-          // Process content blocks
           let hasToolUse = false;
           const toolResults: Array<{
             type: "tool_result";
@@ -268,7 +589,7 @@ export default async (req: Request) => {
               hasToolUse = true;
               sendEvent({ type: "tool_start", name: block.name });
 
-              const result = await callCensusTool(
+              const result = await callTool(
                 block.name,
                 block.input as Record<string, unknown>,
                 censusKey || ""
@@ -293,7 +614,6 @@ export default async (req: Request) => {
             return;
           }
 
-          // Continue conversation with tool results
           currentMessages = [
             ...currentMessages,
             { role: "assistant" as const, content: response.content },

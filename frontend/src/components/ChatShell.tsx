@@ -7,8 +7,8 @@ import { VoiceInput } from './VoiceInput';
 const WELCOME_SUGGESTIONS = [
   "What's the population of New York City?",
   "Compare Austin, TX and Denver, CO on income and education",
-  "Find cities with population over 500k and high median income",
-  "Generate a demographic report for California",
+  "What TV stations are in the Cincinnati DMA?",
+  "Show me demographics for the Dallas-Fort Worth TV market",
 ];
 
 export function ChatShell() {
