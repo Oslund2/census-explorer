@@ -22,7 +22,7 @@ export function ChatMessage({ message, onSuggestionClick }: Props) {
             {isUser ? 'U' : 'C'}
           </div>
           <span className="text-xs text-gray-400 font-medium">
-            {isUser ? 'You' : 'Census Explorer'}
+            {isUser ? 'You' : 'Market Connect'}
           </span>
         </div>
 
