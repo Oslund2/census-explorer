@@ -1,0 +1,30 @@
+services:
+  # --- Census MCP Database ---
+  census-mcp-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: census
+      POSTGRES_PASSWORD: census
+      POSTGRES_DB: census_mcp
+    volumes:
+      - census_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U census"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Census MCP DB Init (migrations + seeds, runs once) ---
+  census-mcp-db-init:
+    build: ./census-mcp/mcp-db
+    depends_on:
+      census-mcp-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://census:census@census-mcp-db:5432/census_mcp
+    command: sh -c "npm run migrate:up && npm run seed"
+
+volumes:
+  census_pg_data:
