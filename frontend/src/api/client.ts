@@ -1,12 +1,17 @@
 import type { SSEEvent } from '../types';
 
 export async function* streamChat(
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
+  disabledSources?: string[],
 ): AsyncGenerator<SSEEvent> {
+  const body: Record<string, unknown> = { messages };
+  if (disabledSources?.length) {
+    body.disabled_sources = disabledSources;
+  }
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {

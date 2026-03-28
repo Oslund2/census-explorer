@@ -8,6 +8,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    disabled_sources: list[str] = []
 
 
 class PromptBuilderRequest(BaseModel):

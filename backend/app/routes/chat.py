@@ -89,10 +89,11 @@ async def prompt_builder(request: PromptBuilderRequest):
 async def chat(request: ChatRequest):
     """SSE streaming chat endpoint. Returns text/event-stream."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    disabled = set(request.disabled_sources)
 
     async def event_generator():
         try:
-            async for event in stream_orchestrate(messages):
+            async for event in stream_orchestrate(messages, disabled_sources=disabled):
                 data = json.dumps(event)
                 yield f"data: {data}\n\n"
         except Exception as e:

@@ -98,9 +98,15 @@ def _strip_fake_tool_xml(text: str) -> str:
     return text
 
 
+SOURCE_TOOL_MAP = {
+    "fema": {"fema-disaster-declarations"},
+}
+
+
 async def stream_orchestrate(
     messages: list[dict],
     max_rounds: int = 10,
+    disabled_sources: set[str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     Streaming agentic loop: Claude + MCP tools.
@@ -108,6 +114,14 @@ async def stream_orchestrate(
     """
     mcp_tools = await mcp_client.list_tools()
     api_tools = direct_tools.get_available_tools()
+
+    # Filter out disabled sources
+    if disabled_sources:
+        disabled_tool_names: set[str] = set()
+        for src in disabled_sources:
+            disabled_tool_names.update(SOURCE_TOOL_MAP.get(src, set()))
+        api_tools = [t for t in api_tools if t["name"] not in disabled_tool_names]
+
     direct_tool_names = {t["name"] for t in api_tools}
 
     # Merge MCP tools + direct API tools

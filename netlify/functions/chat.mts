@@ -832,8 +832,24 @@ export default async (req: Request) => {
     );
   }
 
-  const { messages } = await req.json();
+  const { messages, disabled_sources } = await req.json();
   const client = new Anthropic({ apiKey: anthropicKey });
+
+  // Map source IDs to tool name prefixes to filter
+  const SOURCE_TOOL_MAP: Record<string, string[]> = {
+    fema: ["fema_disasters"],
+  };
+  const disabledTools = new Set<string>();
+  if (Array.isArray(disabled_sources)) {
+    for (const src of disabled_sources) {
+      for (const toolName of (SOURCE_TOOL_MAP[src] || [])) {
+        disabledTools.add(toolName);
+      }
+    }
+  }
+  const activeTools = disabledTools.size > 0
+    ? tools.filter(t => !disabledTools.has(t.name))
+    : tools;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -858,7 +874,7 @@ export default async (req: Request) => {
             max_tokens: 4096,
             system: SYSTEM_PROMPT,
             messages: currentMessages,
-            tools,
+            tools: activeTools,
           });
 
           // Collect tool use blocks while streaming text

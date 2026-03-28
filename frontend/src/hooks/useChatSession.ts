@@ -5,7 +5,7 @@ import { streamChat } from '../api/client';
 let nextId = 1;
 const genId = () => String(nextId++);
 
-export function useChatSession() {
+export function useChatSession(disabledSources?: string[]) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
@@ -31,7 +31,7 @@ export function useChatSession() {
     let fullText = '';
 
     try {
-      for await (const event of streamChat(history)) {
+      for await (const event of streamChat(history, disabledSources)) {
         switch (event.type) {
           case 'text_delta':
             fullText += event.text || '';
@@ -105,7 +105,7 @@ export function useChatSession() {
     );
     setIsLoading(false);
     setToolEvents([]);
-  }, [messages]);
+  }, [messages, disabledSources]);
 
   return { messages, isLoading, toolEvents, sendMessage };
 }

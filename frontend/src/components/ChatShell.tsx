@@ -7,12 +7,32 @@ import { SalesPrompts } from './SalesPrompts';
 import { SourcesKey } from './SourcesKey';
 import { PromptBuilder } from './PromptBuilder';
 
+const DEFAULT_DISABLED = ['fema'];
+
+function loadDisabledSources(): string[] {
+  try {
+    const saved = localStorage.getItem('mc_disabled_sources');
+    return saved ? JSON.parse(saved) : DEFAULT_DISABLED;
+  } catch { return DEFAULT_DISABLED; }
+}
+
 export function ChatShell() {
-  const { messages, isLoading, toolEvents, sendMessage } = useChatSession();
+  const [disabledSources, setDisabledSources] = useState<string[]>(loadDisabledSources);
+  const { messages, isLoading, toolEvents, sendMessage } = useChatSession(disabledSources);
   const [input, setInput] = useState('');
   const [showPromptBuilder, setShowPromptBuilder] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleToggleSource = useCallback((sourceId: string) => {
+    setDisabledSources(prev => {
+      const next = prev.includes(sourceId)
+        ? prev.filter(s => s !== sourceId)
+        : [...prev, sourceId];
+      localStorage.setItem('mc_disabled_sources', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -92,7 +112,7 @@ export function ChatShell() {
                 Prompt Builder
               </button>
               <SalesPrompts onSelect={handleSuggestionClick} />
-              <SourcesKey />
+              <SourcesKey disabledSources={disabledSources} onToggleSource={handleToggleSource} />
             </div>
           )}
 
