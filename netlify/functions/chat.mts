@@ -822,8 +822,8 @@ export default async (req: Request) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const censusKey = process.env.CENSUS_API_KEY;
+  const anthropicKey = Netlify.env.get("ANTHROPIC_API_KEY") || process.env.ANTHROPIC_API_KEY;
+  const censusKey = Netlify.env.get("CENSUS_API_KEY") || process.env.CENSUS_API_KEY;
 
   if (!anthropicKey) {
     return new Response(
@@ -850,32 +850,74 @@ export default async (req: Request) => {
           })
         );
 
-        for (let round = 0; round < 10; round++) {
-          const response = await client.messages.create({
+        // Limit to 5 rounds to stay within serverless timeout
+        for (let round = 0; round < 5; round++) {
+          // Use streaming to send text deltas as they arrive
+          const streamResponse = client.messages.stream({
             model: "claude-sonnet-4-20250514",
-            max_tokens: 8192,
+            max_tokens: 4096,
             system: SYSTEM_PROMPT,
             messages: currentMessages,
             tools,
           });
 
-          let hasToolUse = false;
+          // Collect tool use blocks while streaming text
+          const toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+          let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+
+          for await (const event of streamResponse) {
+            if (event.type === "content_block_start") {
+              if (event.content_block.type === "text") {
+                // Text block starting
+              } else if (event.content_block.type === "tool_use") {
+                currentToolUse = {
+                  id: event.content_block.id,
+                  name: event.content_block.name,
+                  inputJson: "",
+                };
+                sendEvent({ type: "tool_start", name: event.content_block.name });
+              }
+            } else if (event.type === "content_block_delta") {
+              if (event.delta.type === "text_delta") {
+                sendEvent({ type: "text_delta", text: event.delta.text });
+              } else if (event.delta.type === "input_json_delta" && currentToolUse) {
+                currentToolUse.inputJson += event.delta.partial_json;
+              }
+            } else if (event.type === "content_block_stop") {
+              if (currentToolUse) {
+                const parsed = currentToolUse.inputJson
+                  ? JSON.parse(currentToolUse.inputJson)
+                  : {};
+                toolUseBlocks.push({
+                  id: currentToolUse.id,
+                  name: currentToolUse.name,
+                  input: parsed,
+                });
+                currentToolUse = null;
+              }
+            }
+          }
+
+          const finalMessage = await streamResponse.finalMessage();
+
+          if (toolUseBlocks.length === 0) {
+            sendEvent({ type: "done" });
+            controller.close();
+            return;
+          }
+
+          // Execute tool calls
           const toolResults: Array<{
             type: "tool_result";
             tool_use_id: string;
             content: string;
           }> = [];
 
-          for (const block of response.content) {
-            if (block.type === "text") {
-              sendEvent({ type: "text_delta", text: block.text });
-            } else if (block.type === "tool_use") {
-              hasToolUse = true;
-              sendEvent({ type: "tool_start", name: block.name });
-
+          for (const block of toolUseBlocks) {
+            try {
               const result = await callTool(
                 block.name,
-                block.input as Record<string, unknown>,
+                block.input,
                 censusKey || ""
               );
               sendEvent({
@@ -883,24 +925,26 @@ export default async (req: Request) => {
                 name: block.name,
                 result: result.slice(0, 500),
               });
-
               toolResults.push({
                 type: "tool_result",
                 tool_use_id: block.id,
                 content: result,
               });
+            } catch (toolErr) {
+              const errMsg = toolErr instanceof Error ? toolErr.message : "Tool error";
+              sendEvent({ type: "tool_error", name: block.name, error: errMsg });
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: block.id,
+                content: JSON.stringify({ error: errMsg }),
+                is_error: true,
+              } as any);
             }
-          }
-
-          if (!hasToolUse) {
-            sendEvent({ type: "done" });
-            controller.close();
-            return;
           }
 
           currentMessages = [
             ...currentMessages,
-            { role: "assistant" as const, content: response.content },
+            { role: "assistant" as const, content: finalMessage.content },
             { role: "user" as const, content: toolResults },
           ];
         }
