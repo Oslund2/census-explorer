@@ -40,11 +40,9 @@ interface Props {
 
 export function StationPicker({ onSelect, onClose }: Props) {
   const [selected, setSelected] = useState<ScrippsStation | null>(null);
-  const [queryType, setQueryType] = useState<string>('');
 
   const handleStationClick = useCallback((station: ScrippsStation) => {
     setSelected(station);
-    setQueryType('');
   }, []);
 
   const queryTemplates = selected ? [
